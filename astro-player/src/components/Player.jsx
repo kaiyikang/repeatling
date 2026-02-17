@@ -20,12 +20,12 @@ import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 
 // ==============================================================================
-// ⚙️ 配置
+// ⚙️ 全局配置
 // ==============================================================================
 const CONFIG = {
   PADDING_SEC: 0.1,
   TOAST_DURATION: 1500,
-  WAVE_HEIGHT: 64, // 更紧凑的波形高度
+  WAVE_HEIGHT: 64,
 };
 
 // --- Utils ---
@@ -40,7 +40,7 @@ const parseTime = (timeStr) => {
   );
 };
 
-const maskText = (text) => text.replace(/\S/g, "•"); // 使用圆点代替横杠，更现代
+const maskText = (text) => text; // (text) => text.replace(/\S/g, "•");
 
 const useLatest = (value) => {
   const ref = useRef(value);
@@ -48,7 +48,7 @@ const useLatest = (value) => {
   return ref;
 };
 
-// --- Components ---
+// --- Sub-Components ---
 
 const IconButton = ({
   icon: Icon,
@@ -56,7 +56,6 @@ const IconButton = ({
   active,
   disabled,
   title,
-  size = 20,
   variant = "default",
 }) => (
   <button
@@ -64,17 +63,16 @@ const IconButton = ({
     disabled={disabled}
     title={title}
     className={cn(
-      "p-2 rounded-lg transition-all duration-200 flex items-center justify-center",
-      "disabled:opacity-20 disabled:cursor-not-allowed active:scale-95",
-      variant === "primary" &&
-        "bg-emerald-500 text-slate-950 hover:bg-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.3)]",
-      variant === "default" &&
-        (active
+      "p-2 rounded-lg transition-all duration-200 flex items-center justify-center active:scale-95",
+      "disabled:opacity-20 disabled:cursor-not-allowed",
+      variant === "primary"
+        ? "bg-emerald-500 text-slate-950 hover:bg-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.3)]"
+        : active
           ? "bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/50"
-          : "text-slate-400 hover:text-slate-100 hover:bg-white/5"),
+          : "text-slate-400 hover:text-slate-100 hover:bg-white/5",
     )}
   >
-    <Icon size={size} fill={variant === "primary" ? "currentColor" : "none"} />
+    <Icon size={20} fill={variant === "primary" ? "currentColor" : "none"} />
   </button>
 );
 
@@ -89,13 +87,30 @@ const Toast = ({ message, visible }) => (
   </div>
 );
 
-// --- Main Player ---
+const ShortcutRow = ({ label, keys }) => (
+  <div className="flex items-center justify-between text-[10px]">
+    <span className="text-slate-400 font-medium">{label}</span>
+    <div className="flex gap-1">
+      {keys.map((k) => (
+        <span
+          key={k}
+          className="min-w-[18px] h-[18px] px-1 flex items-center justify-center bg-white/10 rounded text-slate-200 font-mono shadow-sm border border-white/5"
+        >
+          {k}
+        </span>
+      ))}
+    </div>
+  </div>
+);
+
+// --- Main Component ---
 
 const Player = () => {
   const containerRef = useRef(null);
   const wavesurfer = useRef(null);
   const wsRegions = useRef(null);
   const inputRef = useRef(null);
+  const reachedEndRef = useRef(false);
 
   const [state, setState] = useState({
     audioFile: null,
@@ -121,12 +136,12 @@ const Player = () => {
     );
   };
 
-  // --- Logic ---
-
+  // --- Logic: Segment Playback ---
   const playSegment = useCallback((index, forceRestart = true) => {
     const { srtData, duration } = stateRef.current;
     if (!wavesurfer.current || !srtData[index]) return;
 
+    reachedEndRef.current = false;
     const sub = srtData[index];
     const start = Math.max(0, parseTime(sub.startTime) - CONFIG.PADDING_SEC);
     const end = Math.min(duration, parseTime(sub.endTime) + CONFIG.PADDING_SEC);
@@ -145,7 +160,7 @@ const Player = () => {
     if (forceRestart) region.play();
   }, []);
 
-  // --- Init WaveSurfer ---
+  // --- Effect: WaveSurfer Setup ---
   useEffect(() => {
     if (!containerRef.current) return;
 
@@ -160,7 +175,6 @@ const Player = () => {
       barWidth: 2,
       barGap: 2,
       barRadius: 2,
-      height: 60,
     });
 
     const wsRegionsInstance = ws.registerPlugin(RegionsPlugin.create());
@@ -172,11 +186,19 @@ const Player = () => {
     ws.on("play", () => setState((p) => ({ ...p, isPlaying: true })));
     ws.on("pause", () => setState((p) => ({ ...p, isPlaying: false })));
 
+    // Loop logic
     wsRegionsInstance.on("region-out", (region) => {
-      stateRef.current.isLooping ? region.play() : ws.pause();
+      if (stateRef.current.isLooping) {
+        region.play();
+      } else {
+        ws.pause();
+        reachedEndRef.current = true;
+      }
     });
 
+    // Interaction logic
     ws.on("interaction", (newTime) => {
+      reachedEndRef.current = false;
       const { srtData } = stateRef.current;
       const newIdx = srtData.findIndex(
         (s) =>
@@ -187,21 +209,27 @@ const Player = () => {
 
     wavesurfer.current = ws;
     return () => ws.destroy();
-  }, []);
+  }, [playSegment]);
 
-  // --- Keyboard ---
+  // --- Effect: Keyboard Shortcuts ---
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (["INPUT", "TEXTAREA"].includes(e.target.tagName)) return;
-      const { currentIdx, srtData, isPlaying, isReady } = stateRef.current;
+      const { currentIdx, srtData, isPlaying, isReady, isLooping } =
+        stateRef.current;
       if (!isReady || srtData.length === 0) return;
 
       const actions = {
         Space: () => {
           e.preventDefault();
-          if (isPlaying) wavesurfer.current.pause();
-          else {
-            // Intelligent Play: Play region if inside, else replay segment
+          if (isPlaying) {
+            wavesurfer.current.pause();
+          } else if (reachedEndRef.current && !isLooping) {
+            // Smart Resume: If finished one segment, jump to next
+            if (currentIdx < srtData.length - 1)
+              playSegment(currentIdx + 1, true);
+          } else {
+            // Check if cursor is inside region, if so play, else replay segment
             const sub = srtData[currentIdx];
             const start = parseTime(sub.startTime) - CONFIG.PADDING_SEC;
             const end = parseTime(sub.endTime) + CONFIG.PADDING_SEC;
@@ -230,7 +258,7 @@ const Player = () => {
         },
         KeyR: () => {
           setState((p) => ({ ...p, isLooping: !p.isLooping }));
-          showToast(`Loop: ${!stateRef.current.isLooping ? "ON" : "OFF"}`);
+          showToast(`Loop: ${!isLooping ? "ON" : "OFF"}`);
         },
         KeyC: () => {
           if ((e.metaKey || e.ctrlKey) && currentIdx !== -1) {
@@ -248,7 +276,7 @@ const Player = () => {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [playSegment]);
 
-  // --- File Handler ---
+  // --- Helper: Process Files ---
   const processFiles = async (files) => {
     const audio = files.find(
       (f) => f.type.startsWith("audio/") || /\.(mp3|wav|m4a)$/i.test(f.name),
@@ -278,11 +306,10 @@ const Player = () => {
 
   return (
     <div className="min-h-screen bg-[#09090b] text-slate-200 font-sans flex items-center justify-center p-4 selection:bg-emerald-500/30">
-      {/* Main Card */}
       <div className="w-full max-w-[640px] bg-slate-900/50 backdrop-blur-md rounded-2xl border border-white/5 shadow-2xl relative overflow-hidden transition-all duration-500">
         <Toast message={toast.msg} visible={toast.visible} />
 
-        {/* 1. Header / Drop Target */}
+        {/* --- Header / Drop Zone --- */}
         <div
           onClick={() => inputRef.current?.click()}
           onDrop={(e) => {
@@ -310,7 +337,7 @@ const Player = () => {
             <>
               <div className="flex items-center gap-3 text-xs font-medium text-slate-400">
                 <div className="flex items-center gap-1.5">
-                  <Music size={12} />{" "}
+                  <Music size={12} />
                   <span className="max-w-[150px] truncate">
                     {state.audioFile?.name || "-"}
                   </span>
@@ -336,18 +363,17 @@ const Player = () => {
           )}
         </div>
 
-        {/* 2. Content Area */}
+        {/* --- Main Content --- */}
         <div
           className={cn(
             "p-6 transition-opacity duration-500",
             !hasFiles && "opacity-30 pointer-events-none blur-sm",
           )}
         >
-          {/* Subtitle */}
+          {/* Subtitle & Time (Flex layout fixes overlap) */}
           <div className="min-h-[140px] flex flex-col items-center justify-center text-center mb-6 px-4 gap-4">
             {currentSub ? (
               <>
-                {/* 字幕文本 */}
                 <div
                   className={cn(
                     "text-xl md:text-2xl font-medium leading-relaxed max-w-prose transition-all duration-300",
@@ -361,7 +387,6 @@ const Player = () => {
                     : maskText(currentSub.text)}
                 </div>
 
-                {/* 时间码：移除 absolute，使用 Flex Gap 自动分隔 */}
                 <div className="text-[10px] font-mono font-medium text-slate-500 bg-white/5 px-3 py-1 rounded-full border border-white/5 select-none">
                   {currentSub.startTime}
                   <span className="mx-2 text-slate-700">/</span>
@@ -379,16 +404,15 @@ const Player = () => {
           </div>
 
           {/* Waveform */}
-          <div className="mb-6 rounded-lg overflow-hidden ring-1 ring-white/5 bg-slate-950/50 relative h-[60px]">
+          <div className="mb-6 rounded-lg overflow-hidden ring-1 ring-white/5 bg-slate-950/50 relative h-[64px]">
             <div
               ref={containerRef}
               className="w-full opacity-80 hover:opacity-100 transition-opacity"
             />
           </div>
 
-          {/* 3. Compact Toolbar */}
+          {/* Toolbar */}
           <div className="flex items-center justify-between bg-white/5 rounded-xl p-2 border border-white/5">
-            {/* Left: Tools */}
             <div className="flex gap-1">
               <IconButton
                 icon={Repeat}
@@ -407,35 +431,21 @@ const Player = () => {
               />
             </div>
 
-            {/* Center: Transport */}
             <div className="flex items-center gap-3">
               <IconButton
                 icon={SkipBack}
                 onClick={() => playSegment(state.currentIdx - 1, true)}
                 disabled={state.currentIdx <= 0}
               />
-
-              <button
-                onClick={() =>
-                  state.isPlaying
-                    ? wavesurfer.current?.pause()
-                    : wavesurfer.current?.play()
-                }
+              <IconButton
+                icon={state.isPlaying ? Pause : Play}
+                variant="primary"
+                onClick={() => {
+                  if (state.isPlaying) wavesurfer.current?.pause();
+                  else wavesurfer.current?.play();
+                }}
                 disabled={!state.isReady}
-                className={cn(
-                  "w-10 h-10 flex items-center justify-center rounded-xl transition-all shadow-lg active:scale-95",
-                  state.isPlaying
-                    ? "bg-slate-700 text-white hover:bg-slate-600"
-                    : "bg-emerald-500 text-slate-950 hover:bg-emerald-400 hover:shadow-emerald-500/20",
-                )}
-              >
-                {state.isPlaying ? (
-                  <Pause size={18} fill="currentColor" />
-                ) : (
-                  <Play size={18} fill="currentColor" className="ml-0.5" />
-                )}
-              </button>
-
+              />
               <IconButton
                 icon={SkipForward}
                 onClick={() => playSegment(state.currentIdx + 1, true)}
@@ -443,7 +453,6 @@ const Player = () => {
               />
             </div>
 
-            {/* Right: Actions */}
             <div className="flex gap-1">
               <IconButton
                 icon={Copy}
@@ -457,11 +466,30 @@ const Player = () => {
                 title="Copy (Cmd+C)"
               />
               <div className="w-px h-6 bg-white/10 mx-1 self-center" />
-              <div
-                className="flex items-center px-2 text-[10px] font-mono text-slate-600 select-none cursor-help"
-                title="Shortcuts"
-              >
-                <Command size={10} className="mr-1" /> Keys
+
+              {/* Hover Shortcuts */}
+              <div className="relative group flex items-center">
+                <div className="flex items-center px-3 py-1.5 text-[10px] font-mono font-medium text-slate-500 hover:text-emerald-400 transition-colors cursor-help select-none bg-transparent hover:bg-white/5 rounded-lg">
+                  <Command size={12} className="mr-1.5" />
+                  <span>Keys</span>
+                </div>
+                <div className="absolute bottom-full right-0 mb-3 w-56 p-3 bg-slate-900/95 backdrop-blur-md border border-white/10 rounded-xl shadow-2xl opacity-0 translate-y-2 pointer-events-none group-hover:opacity-100 group-hover:translate-y-0 group-hover:pointer-events-auto transition-all duration-200 z-50 origin-bottom-right">
+                  <div className="flex items-center justify-between border-b border-white/5 pb-2 mb-2">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                      Shortcuts
+                    </span>
+                    <span className="text-[10px] text-slate-600">v1.0</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    <ShortcutRow label="Play / Pause" keys={["Space"]} />
+                    <ShortcutRow label="Replay Segment" keys={["↑"]} />
+                    <ShortcutRow label="Prev / Next" keys={["←", "→"]} />
+                    <ShortcutRow label="Toggle Loop" keys={["R"]} />
+                    <ShortcutRow label="Toggle Text" keys={["↓"]} />
+                    <ShortcutRow label="Copy Text" keys={["⌘", "C"]} />
+                  </div>
+                  <div className="absolute -bottom-1 right-6 w-2 h-2 bg-slate-900/95 border-r border-b border-white/10 rotate-45"></div>
+                </div>
               </div>
             </div>
           </div>
