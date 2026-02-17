@@ -1,4 +1,4 @@
-# Astro Audio Player
+# Repeatling: Astro Audio Player
 
 Web-based audio player for language learning. Loop segments, sync with subtitles.
 
