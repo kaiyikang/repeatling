@@ -113,7 +113,7 @@ def main():
         print(f"[{format_timestamp(start_time)} --> {format_timestamp(end_time)}] {text}")
 
     # ================= 导出 SRT 字幕文件 =================
-    srt_filename = "output.srt"
+    srt_filename = audio_file.split(".")[0] + ".srt"
     with open(srt_filename, "w", encoding="utf-8") as f:
         for i, sent in enumerate(sentences):
             f.write(f"{i + 1}\n")
