@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.esm.js";
 import srtParser2 from "srt-parser-2";
+import { extractSegment } from "./AudioSegmentExporter";
 import {
   Play,
   Pause,
@@ -266,6 +267,19 @@ const Player = () => {
             navigator.clipboard.writeText(srtData[currentIdx].text);
             showToast("Copied");
           }
+        },
+        KeyX: () => {
+          const { audioFile, srtData: srt, currentIdx: idx } = stateRef.current;
+          if (!audioFile || idx === -1) return;
+          showToast("Exporting…");
+          extractSegment(audioFile, srt[idx]).then(({ blobUrl, filename }) => {
+            const a = document.createElement("a");
+            a.href = blobUrl;
+            a.download = filename;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+            showToast("Downloaded!");
+          }).catch(() => showToast("Export failed"));
         },
       };
 
