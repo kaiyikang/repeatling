@@ -161,6 +161,27 @@ const Player = () => {
     if (forceRestart) region.play();
   }, []);
 
+  // --- Logic: Toggle Play/Pause ---
+  const togglePlayPause = useCallback(() => {
+    const { currentIdx, srtData, isPlaying, isLooping } = stateRef.current;
+    if (isPlaying) {
+      wavesurfer.current?.pause();
+    } else if (reachedEndRef.current && !isLooping) {
+      // 播放完毕：跳到下一段
+      if (currentIdx < srtData.length - 1) playSegment(currentIdx + 1, true);
+    } else {
+      // 游标不在 region 内时重播当前段，否则直接继续
+      const sub = srtData[currentIdx];
+      if (!sub) return;
+      const start = parseTime(sub.startTime) - CONFIG.PADDING_SEC;
+      const end = parseTime(sub.endTime) + CONFIG.PADDING_SEC;
+      const curr = wavesurfer.current?.getCurrentTime() ?? 0;
+      curr >= start && curr <= end
+        ? wavesurfer.current?.play()
+        : playSegment(currentIdx, true);
+    }
+  }, [playSegment]);
+
   // --- Effect: WaveSurfer Setup ---
   useEffect(() => {
     if (!containerRef.current) return;
@@ -223,22 +244,7 @@ const Player = () => {
       const actions = {
         Space: () => {
           e.preventDefault();
-          if (isPlaying) {
-            wavesurfer.current.pause();
-          } else if (reachedEndRef.current && !isLooping) {
-            // Smart Resume: If finished one segment, jump to next
-            if (currentIdx < srtData.length - 1)
-              playSegment(currentIdx + 1, true);
-          } else {
-            // Check if cursor is inside region, if so play, else replay segment
-            const sub = srtData[currentIdx];
-            const start = parseTime(sub.startTime) - CONFIG.PADDING_SEC;
-            const end = parseTime(sub.endTime) + CONFIG.PADDING_SEC;
-            const curr = wavesurfer.current.getCurrentTime();
-            curr >= start && curr <= end
-              ? wavesurfer.current.play()
-              : playSegment(currentIdx, true);
-          }
+          togglePlayPause();
         },
         ArrowUp: () => {
           e.preventDefault();
@@ -278,7 +284,7 @@ const Player = () => {
             a.download = filename;
             a.click();
             setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
-            showToast("Downloaded!");
+            showToast(`${filename} downloaded!`);
           }).catch(() => showToast("Export failed"));
         },
       };
@@ -454,10 +460,7 @@ const Player = () => {
               <IconButton
                 icon={state.isPlaying ? Pause : Play}
                 variant="primary"
-                onClick={() => {
-                  if (state.isPlaying) wavesurfer.current?.pause();
-                  else wavesurfer.current?.play();
-                }}
+                onClick={togglePlayPause}
                 disabled={!state.isReady}
               />
               <IconButton
