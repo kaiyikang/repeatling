@@ -16,7 +16,7 @@ const ImportPage = () => {
   }
 
   return (
-    <div className="min-h-screen bg-[#09090b] text-slate-200 font-sans flex items-center justify-center p-4 selection:bg-emerald-500/30">
+    <div className="flex flex-1 items-center justify-center p-4">
       <div className="w-full max-w-[640px] flex flex-col gap-6">
         {/* Title */}
         <div className="text-center">

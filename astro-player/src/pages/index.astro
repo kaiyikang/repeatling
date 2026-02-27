@@ -12,7 +12,9 @@ import "../styles/global.css";
     <meta name="generator" content={Astro.generator} />
     <title>Player</title>
   </head>
-  <body>
+  <body
+    class="min-h-screen bg-mist-950 text-slate-200 font-sans selection:bg-emerald-500/30 flex flex-col"
+  >
     <ImportPage client:load />
 
     <!-- 静态帮助区：零 JS，纯 HTML -->

@@ -313,7 +313,7 @@ const Player = ({ session, onReset }) => {
     state.currentIdx !== -1 ? srtData[state.currentIdx] : null;
 
   return (
-    <div className="min-h-screen bg-[#09090b] text-slate-200 font-sans flex items-center justify-center p-4 selection:bg-emerald-500/30">
+    <div className="flex flex-1 items-center justify-center p-4">
       <div className="w-full max-w-[640px] bg-slate-900/50 backdrop-blur-md rounded-2xl border border-white/5 shadow-2xl relative overflow-hidden transition-all duration-500">
         <Toast message={toast.msg} visible={toast.visible} />
 
