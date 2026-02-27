@@ -12,10 +12,10 @@ import {
   Eye,
   EyeOff,
   Copy,
-  Upload,
   Music,
   Type,
   Command,
+  RefreshCw,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
@@ -106,17 +106,18 @@ const ShortcutRow = ({ label, keys }) => (
 
 // --- Main Component ---
 
-const Player = () => {
+const Player = ({ session, onReset }) => {
   const containerRef = useRef(null);
   const wavesurfer = useRef(null);
   const wsRegions = useRef(null);
-  const inputRef = useRef(null);
   const reachedEndRef = useRef(false);
 
+  const srtData = useState(() =>
+    session.srtText ? new srtParser2().fromSrt(session.srtText) : [],
+  )[0];
+
   const [state, setState] = useState({
-    audioFile: null,
-    srtData: [],
-    currentIdx: -1,
+    currentIdx: srtData.length > 0 ? 0 : -1,
     isLooping: false,
     showSubtitle: true,
     isPlaying: false,
@@ -137,9 +138,13 @@ const Player = () => {
     );
   };
 
+  // --- Logic: srtData from session (stable ref) ---
+  const srtDataRef = useRef(srtData);
+
   // --- Logic: Segment Playback ---
   const playSegment = useCallback((index, forceRestart = true) => {
-    const { srtData, duration } = stateRef.current;
+    const { duration } = stateRef.current;
+    const srtData = srtDataRef.current;
     if (!wavesurfer.current || !srtData[index]) return;
 
     reachedEndRef.current = false;
@@ -163,7 +168,8 @@ const Player = () => {
 
   // --- Logic: Toggle Play/Pause ---
   const togglePlayPause = useCallback(() => {
-    const { currentIdx, srtData, isPlaying, isLooping } = stateRef.current;
+    const { currentIdx, isPlaying, isLooping } = stateRef.current;
+    const srtData = srtDataRef.current;
     if (isPlaying) {
       wavesurfer.current?.pause();
     } else if (reachedEndRef.current && !isLooping) {
@@ -221,7 +227,7 @@ const Player = () => {
     // Interaction logic
     ws.on("interaction", (newTime) => {
       reachedEndRef.current = false;
-      const { srtData } = stateRef.current;
+      const srtData = srtDataRef.current;
       const newIdx = srtData.findIndex(
         (s) =>
           newTime >= parseTime(s.startTime) && newTime <= parseTime(s.endTime),
@@ -233,12 +239,19 @@ const Player = () => {
     return () => ws.destroy();
   }, [playSegment]);
 
+  // --- Effect: Load Audio ---
+  useEffect(() => {
+    if (session.audioFile) {
+      wavesurfer.current?.load(URL.createObjectURL(session.audioFile));
+    }
+  }, [session.audioFile]);
+
   // --- Effect: Keyboard Shortcuts ---
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (["INPUT", "TEXTAREA"].includes(e.target.tagName)) return;
-      const { currentIdx, srtData, isPlaying, isReady, isLooping } =
-        stateRef.current;
+      const srtData = srtDataRef.current;
+      const { currentIdx, isPlaying, isReady, isLooping } = stateRef.current;
       if (!isReady || srtData.length === 0) return;
 
       const actions = {
@@ -260,7 +273,7 @@ const Player = () => {
         },
         ArrowRight: () => {
           e.preventDefault();
-          if (currentIdx < srtData.length - 1)
+          if (currentIdx < srtDataRef.current.length - 1)
             playSegment(currentIdx + 1, true);
         },
         KeyR: () => {
@@ -270,15 +283,15 @@ const Player = () => {
         KeyC: () => {
           if ((e.metaKey || e.ctrlKey) && currentIdx !== -1) {
             e.preventDefault();
-            navigator.clipboard.writeText(srtData[currentIdx].text);
+            navigator.clipboard.writeText(srtDataRef.current[currentIdx].text);
             showToast("Copied");
           }
         },
         KeyX: () => {
-          const { audioFile, srtData: srt, currentIdx: idx } = stateRef.current;
-          if (!audioFile || idx === -1) return;
+          const { currentIdx: idx } = stateRef.current;
+          if (!session.audioFile || idx === -1) return;
           showToast("Exporting…");
-          extractSegment(audioFile, srt[idx]).then(({ blobUrl, filename }) => {
+          extractSegment(session.audioFile, srtDataRef.current[idx]).then(({ blobUrl, filename }) => {
             const a = document.createElement("a");
             a.href = blobUrl;
             a.download = filename;
@@ -296,100 +309,41 @@ const Player = () => {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [playSegment]);
 
-  // --- Helper: Process Files ---
-  const processFiles = async (files) => {
-    const audio = files.find(
-      (f) => f.type.startsWith("audio/") || /\.(mp3|wav|m4a)$/i.test(f.name),
-    );
-    const srt = files.find((f) => /\.srt$/i.test(f.name));
-
-    if (audio) {
-      wavesurfer.current?.load(URL.createObjectURL(audio));
-      setState((p) => ({
-        ...p,
-        audioFile: audio,
-        currentIdx: -1,
-        isReady: false,
-      }));
-    }
-    if (srt) {
-      const text = await srt.text();
-      const data = new srtParser2().fromSrt(text);
-      setState((p) => ({ ...p, srtData: data }));
-      if (wavesurfer.current) setState((p) => ({ ...p, currentIdx: 0 }));
-    }
-  };
-
   const currentSub =
-    state.currentIdx !== -1 ? state.srtData[state.currentIdx] : null;
-  const hasFiles = state.audioFile || state.srtData.length > 0;
+    state.currentIdx !== -1 ? srtData[state.currentIdx] : null;
 
   return (
     <div className="min-h-screen bg-[#09090b] text-slate-200 font-sans flex items-center justify-center p-4 selection:bg-emerald-500/30">
       <div className="w-full max-w-[640px] bg-slate-900/50 backdrop-blur-md rounded-2xl border border-white/5 shadow-2xl relative overflow-hidden transition-all duration-500">
         <Toast message={toast.msg} visible={toast.visible} />
 
-        {/* --- Header / Drop Zone --- */}
-        <div
-          onClick={() => inputRef.current?.click()}
-          onDrop={(e) => {
-            e.preventDefault();
-            processFiles(Array.from(e.dataTransfer.files));
-          }}
-          onDragOver={(e) => e.preventDefault()}
-          className={cn(
-            "cursor-pointer transition-all duration-300 border-b border-white/5 bg-white/5 hover:bg-white/10 group",
-            hasFiles
-              ? "py-2 px-4 flex justify-between items-center"
-              : "py-12 flex flex-col items-center gap-4 border-dashed border-b-0",
-          )}
-        >
-          <input
-            ref={inputRef}
-            type="file"
-            multiple
-            className="hidden"
-            accept=".mp3,.wav,.srt,audio/*"
-            onChange={(e) => processFiles(Array.from(e.target.files))}
-          />
-
-          {hasFiles ? (
-            <>
-              <div className="flex items-center gap-3 text-xs font-medium text-slate-400">
-                <div className="flex items-center gap-1.5">
-                  <Music size={12} />
-                  <span className="max-w-[150px] truncate">
-                    {state.audioFile?.name || "-"}
-                  </span>
-                </div>
-                <div className="w-px h-3 bg-white/10" />
-                <div className="flex items-center gap-1.5">
-                  <Type size={12} /> <span>{state.srtData.length} lines</span>
-                </div>
-              </div>
-              <div className="text-[10px] text-slate-600 uppercase tracking-widest font-bold group-hover:text-emerald-400 transition-colors">
-                Replace
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="w-12 h-12 rounded-full bg-slate-800 flex items-center justify-center text-slate-500 group-hover:text-emerald-400 group-hover:scale-110 transition-all">
-                <Upload size={20} />
-              </div>
-              <p className="text-sm text-slate-500 font-medium">
-                Drop Audio & SRT here
-              </p>
-            </>
-          )}
+        {/* --- Header: file info + reset --- */}
+        <div className="py-2 px-4 flex justify-between items-center border-b border-white/5 bg-white/5">
+          <div className="flex items-center gap-3 text-xs font-medium text-slate-400">
+            <div className="flex items-center gap-1.5">
+              <Music size={12} />
+              <span className="max-w-[150px] truncate">
+                {session.audioFile?.name || "-"}
+              </span>
+            </div>
+            <div className="w-px h-3 bg-white/10" />
+            <div className="flex items-center gap-1.5">
+              <Type size={12} />
+              <span>{srtData.length} lines</span>
+            </div>
+          </div>
+          <button
+            onClick={onReset}
+            title="换一个文件"
+            className="flex items-center gap-1.5 text-[10px] text-slate-600 uppercase tracking-widest font-bold hover:text-emerald-400 transition-colors"
+          >
+            <RefreshCw size={10} />
+            Reset
+          </button>
         </div>
 
         {/* --- Main Content --- */}
-        <div
-          className={cn(
-            "p-6 transition-opacity duration-500",
-            !hasFiles && "opacity-30 pointer-events-none blur-sm",
-          )}
-        >
+        <div className="p-6">
           {/* Subtitle & Time (Flex layout fixes overlap) */}
           <div className="min-h-[140px] flex flex-col items-center justify-center text-center mb-6 px-4 gap-4">
             {currentSub ? (
@@ -466,7 +420,7 @@ const Player = () => {
               <IconButton
                 icon={SkipForward}
                 onClick={() => playSegment(state.currentIdx + 1, true)}
-                disabled={state.currentIdx >= state.srtData.length - 1}
+                disabled={state.currentIdx >= srtData.length - 1}
               />
             </div>
 
