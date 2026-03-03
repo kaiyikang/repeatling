@@ -3,125 +3,204 @@
 # requires-python = ">=3.10"
 # dependencies = [
 #     "faster-whisper",
+#     "questionary",
 # ]
 # ///
 
 import os
 import sys
+from pathlib import Path
+from dataclasses import dataclass
+
+import questionary
+from questionary import Style
 from faster_whisper import WhisperModel
 
-# ================= 配置区域 =================
-# 1. 音频路径 (请修改为你自己的文件)
-AUDIO_FILE = "AUDIO_FILE.mp3" 
+# ─────────────────────────────────────────────
+#  Constants
+# ─────────────────────────────────────────────
 
-# 2. 模型大小 (macOS 推荐 base 或 small 进行测试，large-v3 效果最好但慢)
-MODEL_SIZE = "large-v3"
+HF_CACHE = Path.home() / ".cache" / "huggingface" / "hub"
 
-# 3. 运行设备 (macOS M1/M2/M3 推荐 cpu + int8)
-DEVICE = "cpu"
-COMPUTE_TYPE = "int8"
-# ===========================================
+SENTENCE_END_CHARS = {'.', '?', '!', '。', '？', '！', '…'}
 
-def is_sentence_end(word_text):
-    """
-    检查一个单词是否包含句子结束标点。
-    支持中文和英文的常见结束符号。
-    """
-    end_chars = {'.', '?', '!', '。', '？', '！', '…'}
-    # 清理空白字符后检查最后一个字符
-    clean_word = word_text.strip()
-    if not clean_word:
-        return False
-    return clean_word[-1] in end_chars
+MODELS = [
+    ("tiny",     "· 最快，精度较低"),
+    ("base",     "· 快，适合测试"),
+    ("small",    "· 均衡"),
+    ("medium",   "· 较准确"),
+    ("large-v2", "· 高精度"),
+    ("large-v3", "· 最高精度 （默认）"),
+    ("turbo",    "· 快速高精度 (需GPU)"),
+]
 
-def format_timestamp(seconds):
-    """将秒数转换为 SRT 格式的时间戳 (HH:MM:SS,mmm)"""
-    millis = int((seconds - int(seconds)) * 1000)
-    seconds = int(seconds)
-    minutes = seconds // 60
-    hours = minutes // 60
-    minutes %= 60
-    seconds %= 60
-    return f"{hours:02}:{minutes:02}:{seconds:02},{millis:03}"
+DEVICES = [
+    ("cpu",  "· 兼容所有设备，macOS 推荐 ✦"),
+    ("cuda", "· NVIDIA GPU"),
+    ("auto", "· 自动检测"),
+]
 
-def main():
-    # 从命令行参数获取音频文件，如果没有提供则使用默认配置
-    if len(sys.argv) > 1:
-        audio_file = sys.argv[1]
-        print(f"📁 使用指定的音频文件: {audio_file}")
-    else:
-        audio_file = AUDIO_FILE
-        print(f"📁 使用默认的音频文件: {audio_file}")
+CPU_COMPUTE_TYPES = [
+    ("int8",    "· 最快，内存占用小 ✦ CPU推荐"),
+    ("float32", "· 全精度"),
+]
 
-    if not os.path.exists(audio_file):
-        print(f"❌ 错误：找不到文件 '{audio_file}'，请确保文件存在。")
-        print(f"用法: python {os.path.basename(__file__)} [音频文件路径]")
-        return
+GPU_COMPUTE_TYPES = [
+    ("float16",      "· GPU 推荐 ✦"),
+    ("int8_float16", "· 省显存"),
+    ("int8",         "· 最省内存"),
+    ("float32",      "· 全精度"),
+]
 
-    print(f"🚀 正在加载模型 ({MODEL_SIZE}) on {DEVICE}...")
-    model = WhisperModel(MODEL_SIZE, device=DEVICE, compute_type=COMPUTE_TYPE)
+PROMPT_STYLE = Style([
+    ("qmark",       "fg:#2563eb bold"),
+    ("question",    "bold"),
+    ("answer",      "fg:#2563eb bold"),
+    ("pointer",     "fg:#2563eb bold"),
+    ("highlighted", "fg:#2563eb bold"),
+    ("selected",    "fg:#93c5fd"),
+    ("instruction", "fg:#6b7280 italic"),
+])
 
-    print("🎙️ 正在转录并进行词级对齐 (这可能需要一些时间)...")
-    
-    # 关键参数：
-    # word_timestamps=True: 获取每个词的时间，用于精准重组句子
-    # vad_filter=True: 过滤静音片段，提高时间轴准确度
-    segments, info = model.transcribe(
-        audio_file,
-        beam_size=5,
-        word_timestamps=True,
-        vad_filter=True
+# ─────────────────────────────────────────────
+#  Data
+# ─────────────────────────────────────────────
+
+@dataclass
+class TranscribeConfig:
+    audio_file: str
+    model_size: str
+    device: str
+    compute_type: str
+
+# ─────────────────────────────────────────────
+#  Helpers
+# ─────────────────────────────────────────────
+
+def is_model_cached(name: str) -> bool:
+    return (HF_CACHE / f"models--Systran--faster-whisper-{name}").exists()
+
+def model_label(name: str, desc: str) -> str:
+    badge = "✓ 已下载" if is_model_cached(name) else "↓ 需下载"
+    return f"{name:<12}{desc}  [{badge}]"
+
+def is_sentence_end(word: str) -> bool:
+    clean = word.strip()
+    return bool(clean) and clean[-1] in SENTENCE_END_CHARS
+
+def format_timestamp(seconds: float) -> str:
+    ms = int((seconds % 1) * 1000)
+    s  = int(seconds)
+    m, s = divmod(s, 60)
+    h, m = divmod(m, 60)
+    return f"{h:02}:{m:02}:{s:02},{ms:03}"
+
+def select(prompt: str, options: list[tuple], default: str, label_fn=None) -> str:
+    fmt = label_fn or (lambda n, d: f"{n:<14}{d}")
+    choices = [questionary.Choice(fmt(n, d), n) for n, d in options]
+    answer = questionary.select(
+        prompt, choices=choices, default=default,
+        style=PROMPT_STYLE, instruction="(↑↓ 移动，回车确认)", use_indicator=True,
+    ).ask()
+    if answer is None:
+        print("\n  已取消。")
+        sys.exit(0)
+    return answer
+
+# ─────────────────────────────────────────────
+#  Steps
+# ─────────────────────────────────────────────
+
+def parse_audio_file() -> str:
+    if len(sys.argv) < 2:
+        print("❌ 错误：未指定音频文件。")
+        print(f"用法: uv run {os.path.basename(__file__)} <音频文件路径>")
+        sys.exit(1)
+    return sys.argv[1]
+
+def prompt_config(audio_file: str) -> TranscribeConfig:
+    print("\n  🎙  \033[1mWhisper 字幕生成器\033[0m\n")
+    model_size   = select("① 选择模型大小", 
+                            MODELS, 
+                            default="large-v3", 
+                            label_fn=model_label)
+    device       = select("② 选择运行设备", 
+                            DEVICES, 
+                            default="cpu")
+    compute_type = select(
+        "③ 选择计算精度",
+        CPU_COMPUTE_TYPES if device == "cpu" else GPU_COMPUTE_TYPES,
+        default="int8" if device == "cpu" else "float16",
     )
 
-    print(f"检测语言: {info.language} (置信度: {info.language_probability:.2f})")
-    print("-" * 50)
+    return TranscribeConfig(audio_file, model_size, device, compute_type)
 
-    #用于存储重组后的句子
-    sentences = []
-    current_words = []
-    
-    # 开始遍历 Whisper 生成的片段
+def confirm_config(cfg: TranscribeConfig) -> None:
+    filename = os.path.basename(cfg.audio_file)
+    print(f"""
+  ╭─────────────────────────────────╮
+  │  模型  {cfg.model_size:<28}│
+  │  设备  {cfg.device:<28}│
+  │  精度  {cfg.compute_type:<28}│
+  │  文件  {filename:<28}│
+  ╰─────────────────────────────────╯""")
+    ok = questionary.confirm("  确认开始转录？", default=True, style=PROMPT_STYLE).ask()
+    if ok is None or not ok:
+        print("  已取消。\n")
+        sys.exit(0)
+
+
+def transcribe(cfg: TranscribeConfig) -> list[dict]:
+    print(f"\n🚀 正在加载模型 {cfg.model_size} ({cfg.device} / {cfg.compute_type})…")
+    model = WhisperModel(cfg.model_size, device=cfg.device, compute_type=cfg.compute_type)
+
+    print("🎙️  正在转录，请稍候…\n")
+    segments, info = model.transcribe(cfg.audio_file, beam_size=5, word_timestamps=True, vad_filter=True)
+    print(f"  检测语言: {info.language}  (置信度 {info.language_probability:.0%})")
+    print("─" * 52)
+    return build_sentences(segments)
+
+
+def build_sentences(segments) -> list[dict]:
+    def flush_sentence(words: list) -> dict:
+        start = words[0].start
+        end   = words[-1].end
+        text  = "".join(w.word for w in words).strip()
+        print(f"  [{format_timestamp(start)} → {format_timestamp(end)}] {text}")
+        return {"start": start, "end": end, "text": text}
+
+    sentences, current_words = [], []
     for segment in segments:
         for word in segment.words:
             current_words.append(word)
-            
-            # 如果检测到该词是句子的结尾
             if is_sentence_end(word.word):
-                # 提取当前句子的信息
-                start_time = current_words[0].start
-                end_time = current_words[-1].end
-                text = "".join([w.word for w in current_words]).strip()
-                
-                sentences.append({
-                    "start": start_time,
-                    "end": end_time,
-                    "text": text
-                })
-                
-                # 打印进度
-                print(f"[{format_timestamp(start_time)} --> {format_timestamp(end_time)}] {text}")
-                
-                # 重置缓冲区
+                sentences.append(flush_sentence(current_words))
                 current_words = []
-
-    # 处理最后可能剩余的单词（没有标点结尾的情况）
     if current_words:
-        start_time = current_words[0].start
-        end_time = current_words[-1].end
-        text = "".join([w.word for w in current_words]).strip()
-        sentences.append({"start": start_time, "end": end_time, "text": text})
-        print(f"[{format_timestamp(start_time)} --> {format_timestamp(end_time)}] {text}")
+        sentences.append(flush_sentence(current_words))
+    return sentences
 
-    # ================= 导出 SRT 字幕文件 =================
-    srt_filename = os.path.splitext(audio_file)[0] + ".srt"
-    with open(srt_filename, "w", encoding="utf-8") as f:
-        for i, sent in enumerate(sentences):
-            f.write(f"{i + 1}\n")
-            f.write(f"{format_timestamp(sent['start'])} --> {format_timestamp(sent['end'])}\n")
-            f.write(f"{sent['text']}\n\n")
-            
-    print("-" * 50)
-    print(f"✅ 处理完成！字幕已保存为: {srt_filename}")
+def export_srt(sentences: list[dict], audio_file: str) -> str:
+    srt_path = os.path.splitext(audio_file)[0] + ".srt"
+    with open(srt_path, "w", encoding="utf-8") as f:
+        for i, s in enumerate(sentences, 1):
+            f.write(f"{i}\n{format_timestamp(s['start'])} --> {format_timestamp(s['end'])}\n{s['text']}\n\n")
+    return srt_path
+
+# ─────────────────────────────────────────────
+#  Entry point
+# ─────────────────────────────────────────────
+
+def main():
+    
+    audio_file = parse_audio_file()
+    cfg        = prompt_config(audio_file)
+    confirm_config(cfg)
+    sentences  = transcribe(cfg)
+    srt_path   = export_srt(sentences, audio_file)
+
+    print("─" * 52)
+    print(f"✅ 完成！字幕已保存至: {srt_path}\n")
 
 if __name__ == "__main__":
     main()
