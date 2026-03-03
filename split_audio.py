@@ -13,7 +13,7 @@ import argparse
 import shutil
 
 # ================= 配置区域 =================
-DEFAULT_SEGMENT_TIME = 180  # 目标切分时长 (5分钟)
+DEFAULT_SEGMENT_TIME = 200  # 目标切分时长 (5分钟)
 SILENCE_THRESH = "-40dB"  # 静音阈值
 SILENCE_DURATION = 0.5  # 持续多久算静音 (秒)
 SEARCH_WINDOW = 60  # 在目标时间点前后多少秒内寻找静音
