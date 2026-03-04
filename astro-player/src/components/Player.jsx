@@ -184,24 +184,25 @@ const Player = ({ session, onReset }) => {
     
     if (isPlaying) {
       wavesurfer.current?.pause();
-    } else {
-      if (playMode === "single") {
-        // 用实际播放位置判断是否需要重头播放，避免 reachedEndRef 的竞态问题
-        const regions = wsRegions.current?.getRegions() || [];
-        const region = regions[0];
-        const currentTime = wavesurfer.current?.getCurrentTime() || 0;
-
-        if (region && currentTime < region.end - 0.05) {
-          // 还在 region 范围内，从当前位置继续播放
-          wavesurfer.current?.play();
-        } else {
-          // 已经超出 region 末尾，从头开始
-          playSegment(currentIdx, true);
-        }
-      } else {
-        wavesurfer.current?.play();
-      }
+      return;
     }
+
+    if (playMode !== "single") {
+      wavesurfer.current?.play();
+      return;
+    }
+
+    // single mode
+    const region = wsRegions.current?.getRegions()[0];
+    const currentTime = wavesurfer.current?.getCurrentTime() || 0;
+    const withinRegion = region && currentTime < region.end - 0.05;
+
+    if (withinRegion) {
+      wavesurfer.current?.play();
+    } else {
+      playSegment(currentIdx, true);
+    }
+
   }, [playSegment]);
 
   // --- Effect: WaveSurfer Setup ---
