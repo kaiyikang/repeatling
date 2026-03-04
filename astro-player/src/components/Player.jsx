@@ -228,7 +228,7 @@ const Player = ({ session, onReset }) => {
     ws.on("pause", () => setState((p) => ({ ...p, isPlaying: false })));
 
     wsRegionsInstance.on("region-out", (region) => {
-      if (stateRef.current.playMode === "single") {
+      if (stateRef.current.playMode === "single" && ws.isPlaying()) {
         ws.pause();
         reachedEndRef.current = true;
       }
