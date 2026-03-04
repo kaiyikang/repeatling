@@ -9,6 +9,7 @@ import {
   SkipBack,
   SkipForward,
   Repeat,
+  Repeat1, // 👈 新增引入了 Repeat1 用于表示单句循环
   Eye,
   EyeOff,
   Copy,
@@ -41,7 +42,7 @@ const parseTime = (timeStr) => {
   );
 };
 
-const maskText = (text) => text; // (text) => text.replace(/\S/g, "•");
+const maskText = (text) => text; 
 
 const useLatest = (value) => {
   const ref = useRef(value);
@@ -118,7 +119,7 @@ const Player = ({ session, onReset }) => {
 
   const [state, setState] = useState({
     currentIdx: srtData.length > 0 ? 0 : -1,
-    isLooping: false,
+    playMode: "sequential", // 👈 "sequential" | "single" 替代了原来的 isLooping
     showSubtitle: true,
     isPlaying: false,
     isReady: false,
@@ -138,19 +139,18 @@ const Player = ({ session, onReset }) => {
     );
   };
 
-  // --- Logic: srtData from session (stable ref) ---
   const srtDataRef = useRef(srtData);
 
   // --- Logic: Segment Playback ---
   const playSegment = useCallback((index, forceRestart = true) => {
-    const { duration } = stateRef.current;
+    const { duration, playMode } = stateRef.current;
     const srtData = srtDataRef.current;
     if (!wavesurfer.current || !srtData[index]) return;
 
     reachedEndRef.current = false;
     const sub = srtData[index];
     const start = Math.max(0, parseTime(sub.startTime) - CONFIG.PADDING_SEC);
-    const end = Math.min(duration, parseTime(sub.endTime) + CONFIG.PADDING_SEC);
+    const end = Math.min(duration || wavesurfer.current.getDuration(), parseTime(sub.endTime) + CONFIG.PADDING_SEC);
 
     setState((prev) => ({ ...prev, currentIdx: index }));
 
@@ -163,28 +163,34 @@ const Player = ({ session, onReset }) => {
       resize: false,
     });
 
-    if (forceRestart) region.play();
+    if (forceRestart) {
+      if (playMode === "single") {
+        region.play(); // 单句模式：依赖 region.play() 自动在句末停止
+      } else {
+        wavesurfer.current.setTime(start);
+        wavesurfer.current.play(); // 顺序模式：直接往后播放
+      }
+    }
   }, []);
 
   // --- Logic: Toggle Play/Pause ---
   const togglePlayPause = useCallback(() => {
-    const { currentIdx, isPlaying, isLooping } = stateRef.current;
-    const srtData = srtDataRef.current;
+    const { currentIdx, isPlaying, playMode } = stateRef.current;
+    
     if (isPlaying) {
       wavesurfer.current?.pause();
-    } else if (reachedEndRef.current && !isLooping) {
-      // 播放完毕：跳到下一段
-      if (currentIdx < srtData.length - 1) playSegment(currentIdx + 1, true);
     } else {
-      // 游标不在 region 内时重播当前段，否则直接继续
-      const sub = srtData[currentIdx];
-      if (!sub) return;
-      const start = parseTime(sub.startTime) - CONFIG.PADDING_SEC;
-      const end = parseTime(sub.endTime) + CONFIG.PADDING_SEC;
-      const curr = wavesurfer.current?.getCurrentTime() ?? 0;
-      curr >= start && curr <= end
-        ? wavesurfer.current?.play()
-        : playSegment(currentIdx, true);
+      // 如果处于单句模式，且刚好停在了句末，再次点击播放则从句首重播
+      if (playMode === "single") {
+        if (reachedEndRef.current) {
+          playSegment(currentIdx, true); 
+        } else {
+          wavesurfer.current?.play(); 
+        }
+      } else {
+        // 顺序播放模式直接继续播放即可
+        wavesurfer.current?.play();
+      }
     }
   }, [playSegment]);
 
@@ -214,13 +220,35 @@ const Player = ({ session, onReset }) => {
     ws.on("play", () => setState((p) => ({ ...p, isPlaying: true })));
     ws.on("pause", () => setState((p) => ({ ...p, isPlaying: false })));
 
-    // Loop logic
+    // 👈 核心逻辑1：出界处理。只有单句模式需要停住
     wsRegionsInstance.on("region-out", (region) => {
-      if (stateRef.current.isLooping) {
-        region.play();
-      } else {
+      if (stateRef.current.playMode === "single") {
         ws.pause();
         reachedEndRef.current = true;
+      }
+    });
+
+    // 👈 核心逻辑2：顺序播放时，通过 timeupdate 动态更新字幕和高亮区域
+    ws.on("timeupdate", (currentTime) => {
+      if (stateRef.current.playMode === "sequential") {
+        const srtData = srtDataRef.current;
+        const currentIdx = stateRef.current.currentIdx;
+        const newIdx = srtData.findIndex(
+          (s) => currentTime >= parseTime(s.startTime) && currentTime <= parseTime(s.endTime)
+        );
+        
+        // 当进入新句子时，更新字幕和高亮区间
+        if (newIdx !== -1 && newIdx !== currentIdx) {
+          setState((p) => ({ ...p, currentIdx: newIdx }));
+          const sub = srtData[newIdx];
+          const start = Math.max(0, parseTime(sub.startTime) - CONFIG.PADDING_SEC);
+          const end = Math.min(ws.getDuration(), parseTime(sub.endTime) + CONFIG.PADDING_SEC);
+
+          wsRegionsInstance.clearRegions();
+          wsRegionsInstance.addRegion({
+            start, end, color: "rgba(16, 185, 129, 0.15)", drag: false, resize: false
+          });
+        }
       }
     });
 
@@ -251,7 +279,7 @@ const Player = ({ session, onReset }) => {
     const handleKeyDown = (e) => {
       if (["INPUT", "TEXTAREA"].includes(e.target.tagName)) return;
       const srtData = srtDataRef.current;
-      const { currentIdx, isPlaying, isReady, isLooping } = stateRef.current;
+      const { currentIdx, isReady } = stateRef.current;
       if (!isReady || srtData.length === 0) return;
 
       const actions = {
@@ -277,8 +305,12 @@ const Player = ({ session, onReset }) => {
             playSegment(currentIdx + 1, true);
         },
         KeyR: () => {
-          setState((p) => ({ ...p, isLooping: !p.isLooping }));
-          showToast(`Loop: ${!isLooping ? "ON" : "OFF"}`);
+          // 👈 快捷键同步更新
+          setState((p) => {
+            const newMode = p.playMode === "sequential" ? "single" : "sequential";
+            showToast(`Mode: ${newMode === "single" ? "Single Pause" : "Sequential"}`);
+            return { ...p, playMode: newMode };
+          });
         },
         KeyC: () => {
           if ((e.metaKey || e.ctrlKey) && currentIdx !== -1) {
@@ -307,7 +339,7 @@ const Player = ({ session, onReset }) => {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [playSegment]);
+  }, [playSegment, togglePlayPause]); // 添加 togglePlayPause 作为依赖
 
   const currentSub =
     state.currentIdx !== -1 ? srtData[state.currentIdx] : null;
@@ -317,7 +349,7 @@ const Player = ({ session, onReset }) => {
       <div className="w-full max-w-[640px] bg-slate-900/50 backdrop-blur-md rounded-2xl border border-white/5 shadow-2xl relative overflow-hidden transition-all duration-500">
         <Toast message={toast.msg} visible={toast.visible} />
 
-        {/* --- Header: file info + reset --- */}
+        {/* --- Header --- */}
         <div className="py-2 px-4 flex justify-between items-center border-b border-white/5 bg-white/5">
           <div className="flex items-center gap-3 text-xs font-medium text-slate-400">
             <div className="flex items-center gap-1.5">
@@ -344,7 +376,6 @@ const Player = ({ session, onReset }) => {
 
         {/* --- Main Content --- */}
         <div className="p-6">
-          {/* Subtitle & Time (Flex layout fixes overlap) */}
           <div className="min-h-[140px] flex flex-col items-center justify-center text-center mb-6 px-4 gap-4">
             {currentSub ? (
               <>
@@ -377,7 +408,6 @@ const Player = ({ session, onReset }) => {
             )}
           </div>
 
-          {/* Waveform */}
           <div className="mb-6 rounded-lg overflow-hidden ring-1 ring-white/5 bg-slate-950/50 relative h-[64px]">
             <div
               ref={containerRef}
@@ -388,13 +418,16 @@ const Player = ({ session, onReset }) => {
           {/* Toolbar */}
           <div className="flex items-center justify-between bg-white/5 rounded-xl p-2 border border-white/5">
             <div className="flex gap-1">
+              {/* 👈 核心逻辑3：修改 IconButton 绑定和 UI 表现 */}
               <IconButton
-                icon={Repeat}
-                onClick={() =>
-                  setState((p) => ({ ...p, isLooping: !p.isLooping }))
-                }
-                active={state.isLooping}
-                title="Loop (R)"
+                icon={state.playMode === "single" ? Repeat1 : Repeat}
+                onClick={() => {
+                  const newMode = state.playMode === "sequential" ? "single" : "sequential";
+                  setState((p) => ({ ...p, playMode: newMode }));
+                  showToast(`Mode: ${newMode === "single" ? "Single Pause" : "Sequential"}`);
+                }}
+                active={state.playMode === "single"}
+                title={state.playMode === "single" ? "Single Sentence (R)" : "Sequential Play (R)"}
               />
               <IconButton
                 icon={state.showSubtitle ? Eye : EyeOff}
@@ -438,7 +471,6 @@ const Player = ({ session, onReset }) => {
               />
               <div className="w-px h-6 bg-white/10 mx-1 self-center" />
 
-              {/* Hover Shortcuts */}
               <div className="relative group flex items-center">
                 <div className="flex items-center px-3 py-1.5 text-[10px] font-mono font-medium text-slate-500 hover:text-emerald-400 transition-colors cursor-help select-none bg-transparent hover:bg-white/5 rounded-lg">
                   <Command size={12} className="mr-1.5" />
@@ -455,7 +487,7 @@ const Player = ({ session, onReset }) => {
                     <ShortcutRow label="Play / Pause" keys={["Space"]} />
                     <ShortcutRow label="Replay Segment" keys={["↑"]} />
                     <ShortcutRow label="Prev / Next" keys={["←", "→"]} />
-                    <ShortcutRow label="Toggle Loop" keys={["R"]} />
+                    <ShortcutRow label="Toggle Mode" keys={["R"]} />
                     <ShortcutRow label="Toggle Text" keys={["↓"]} />
                     <ShortcutRow label="Copy Text" keys={["⌘", "C"]} />
                   </div>
