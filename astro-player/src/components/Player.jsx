@@ -167,13 +167,13 @@ const Player = ({ session, onReset }) => {
       resize: false,
     });
 
-    if (forceRestart) {
-      if (playMode === "single") {
-        region.play();
-      } else {
-        wavesurfer.current.setTime(start);
-        wavesurfer.current.play();
-      }
+    if (!forceRestart) return;
+
+    if (playMode === "single") {
+      region.play();
+    } else {
+      wavesurfer.current.setTime(start);
+      wavesurfer.current.play();
     }
   }, []);
 
