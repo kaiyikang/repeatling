@@ -324,7 +324,9 @@ const Player = ({ session, onReset }) => {
         KeyC: () => {
           if ((e.metaKey || e.ctrlKey) && currentIdx !== -1) {
             e.preventDefault();
-            navigator.clipboard.writeText(srtDataRef.current[currentIdx].text);
+            const selection = window.getSelection()?.toString();
+            const textToCopy = selection || srtDataRef.current[currentIdx].text;
+            navigator.clipboard.writeText(textToCopy);
             showToast("Copied");
           }
         },
