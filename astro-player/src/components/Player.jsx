@@ -186,10 +186,17 @@ const Player = ({ session, onReset }) => {
       wavesurfer.current?.pause();
     } else {
       if (playMode === "single") {
-        if (reachedEndRef.current) {
-          playSegment(currentIdx, true); 
+        // 用实际播放位置判断是否需要重头播放，避免 reachedEndRef 的竞态问题
+        const regions = wsRegions.current?.getRegions() || [];
+        const region = regions[0];
+        const currentTime = wavesurfer.current?.getCurrentTime() || 0;
+
+        if (region && currentTime < region.end - 0.05) {
+          // 还在 region 范围内，从当前位置继续播放
+          wavesurfer.current?.play();
         } else {
-          wavesurfer.current?.play(); 
+          // 已经超出 region 末尾，从头开始
+          playSegment(currentIdx, true);
         }
       } else {
         wavesurfer.current?.play();
