@@ -117,6 +117,9 @@ const Player = ({ session, onReset }) => {
     session.srtText ? new srtParser2().fromSrt(session.srtText) : [],
   )[0];
 
+  // 👈 核心修复 1：引入同步的 Ref 来追踪索引，防止 React setState 异步导致的错乱
+  const syncIdxRef = useRef(srtData.length > 0 ? 0 : -1);
+
   const [state, setState] = useState({
     currentIdx: srtData.length > 0 ? 0 : -1,
     playMode: "sequential",
@@ -152,6 +155,7 @@ const Player = ({ session, onReset }) => {
     const start = Math.max(0, parseTime(sub.startTime) - CONFIG.PADDING_SEC);
     const end = Math.min(duration || wavesurfer.current.getDuration(), parseTime(sub.endTime) + CONFIG.PADDING_SEC);
 
+    syncIdxRef.current = index; // 👈 每次切换段落，立刻同步最新索引
     setState((prev) => ({ ...prev, currentIdx: index }));
 
     wsRegions.current.clearRegions();
@@ -175,7 +179,8 @@ const Player = ({ session, onReset }) => {
 
   // --- Logic: Toggle Play/Pause ---
   const togglePlayPause = useCallback(() => {
-    const { currentIdx, isPlaying, playMode } = stateRef.current;
+    const { isPlaying, playMode } = stateRef.current;
+    const currentIdx = syncIdxRef.current; // 使用同步的索引
     
     if (isPlaying) {
       wavesurfer.current?.pause();
@@ -229,17 +234,20 @@ const Player = ({ session, onReset }) => {
       }
     });
 
-    // 👈 修复 2：优化 timeupdate 判定，并且复用 playSegment
+    // 👈 核心修复 2：防止幽灵跳跃
     ws.on("timeupdate", (currentTime) => {
+      // 过滤掉暂停状态下、因为音频节点卸载导致的异常时间偏移！
+      if (!ws.isPlaying()) return; 
+
       if (stateRef.current.playMode === "sequential") {
         const srtData = srtDataRef.current;
-        const currentIdx = stateRef.current.currentIdx;
+        const currentIdx = syncIdxRef.current; // 使用最新、最准确的底层索引！
+        
         const newIdx = srtData.findIndex(
           (s) => currentTime >= parseTime(s.startTime) && currentTime <= parseTime(s.endTime)
         );
         
         const regions = wsRegionsInstance.getRegions();
-        // 当进入新句子，或者当前页面居然没有高亮区域时（兜底），触发更新
         if (newIdx !== -1 && (newIdx !== currentIdx || regions.length === 0)) {
           playSegment(newIdx, false);
         }
@@ -272,7 +280,9 @@ const Player = ({ session, onReset }) => {
     const handleKeyDown = (e) => {
       if (["INPUT", "TEXTAREA"].includes(e.target.tagName)) return;
       const srtData = srtDataRef.current;
-      const { currentIdx, isReady } = stateRef.current;
+      const { isReady } = stateRef.current;
+      const currentIdx = syncIdxRef.current; // 👈 快捷键同样依赖同步的索引
+      
       if (!isReady || srtData.length === 0) return;
 
       const actions = {
@@ -312,10 +322,9 @@ const Player = ({ session, onReset }) => {
           }
         },
         KeyX: () => {
-          const { currentIdx: idx } = stateRef.current;
-          if (!session.audioFile || idx === -1) return;
+          if (!session.audioFile || currentIdx === -1) return;
           showToast("Exporting…");
-          extractSegment(session.audioFile, srtDataRef.current[idx]).then(({ blobUrl, filename }) => {
+          extractSegment(session.audioFile, srtDataRef.current[currentIdx]).then(({ blobUrl, filename }) => {
             const a = document.createElement("a");
             a.href = blobUrl;
             a.download = filename;
@@ -333,8 +342,7 @@ const Player = ({ session, onReset }) => {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [playSegment, togglePlayPause]);
 
-  const currentSub =
-    state.currentIdx !== -1 ? srtData[state.currentIdx] : null;
+  const currentSub = state.currentIdx !== -1 ? srtData[state.currentIdx] : null;
 
   return (
     <div className="flex flex-1 items-center justify-center p-4">
