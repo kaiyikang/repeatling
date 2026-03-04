@@ -9,7 +9,7 @@ import {
   SkipBack,
   SkipForward,
   Repeat,
-  Repeat1, // 👈 新增引入了 Repeat1 用于表示单句循环
+  Repeat1,
   Eye,
   EyeOff,
   Copy,
@@ -42,7 +42,7 @@ const parseTime = (timeStr) => {
   );
 };
 
-const maskText = (text) => text; 
+const maskText = (text) => text;
 
 const useLatest = (value) => {
   const ref = useRef(value);
@@ -119,7 +119,7 @@ const Player = ({ session, onReset }) => {
 
   const [state, setState] = useState({
     currentIdx: srtData.length > 0 ? 0 : -1,
-    playMode: "sequential", // 👈 "sequential" | "single" 替代了原来的 isLooping
+    playMode: "sequential",
     showSubtitle: true,
     isPlaying: false,
     isReady: false,
@@ -165,10 +165,10 @@ const Player = ({ session, onReset }) => {
 
     if (forceRestart) {
       if (playMode === "single") {
-        region.play(); // 单句模式：依赖 region.play() 自动在句末停止
+        region.play();
       } else {
         wavesurfer.current.setTime(start);
-        wavesurfer.current.play(); // 顺序模式：直接往后播放
+        wavesurfer.current.play();
       }
     }
   }, []);
@@ -180,7 +180,6 @@ const Player = ({ session, onReset }) => {
     if (isPlaying) {
       wavesurfer.current?.pause();
     } else {
-      // 如果处于单句模式，且刚好停在了句末，再次点击播放则从句首重播
       if (playMode === "single") {
         if (reachedEndRef.current) {
           playSegment(currentIdx, true); 
@@ -188,7 +187,6 @@ const Player = ({ session, onReset }) => {
           wavesurfer.current?.play(); 
         }
       } else {
-        // 顺序播放模式直接继续播放即可
         wavesurfer.current?.play();
       }
     }
@@ -214,13 +212,16 @@ const Player = ({ session, onReset }) => {
     const wsRegionsInstance = ws.registerPlugin(RegionsPlugin.create());
     wsRegions.current = wsRegionsInstance;
 
-    ws.on("ready", () =>
-      setState((p) => ({ ...p, isReady: true, duration: ws.getDuration() })),
-    );
+    ws.on("ready", () => {
+      setState((p) => ({ ...p, isReady: true, duration: ws.getDuration() }));
+      if (srtDataRef.current.length > 0) {
+        setTimeout(() => playSegment(0, false), 0);
+      }
+    });
+
     ws.on("play", () => setState((p) => ({ ...p, isPlaying: true })));
     ws.on("pause", () => setState((p) => ({ ...p, isPlaying: false })));
 
-    // 👈 核心逻辑1：出界处理。只有单句模式需要停住
     wsRegionsInstance.on("region-out", (region) => {
       if (stateRef.current.playMode === "single") {
         ws.pause();
@@ -228,7 +229,7 @@ const Player = ({ session, onReset }) => {
       }
     });
 
-    // 👈 核心逻辑2：顺序播放时，通过 timeupdate 动态更新字幕和高亮区域
+    // 👈 修复 2：优化 timeupdate 判定，并且复用 playSegment
     ws.on("timeupdate", (currentTime) => {
       if (stateRef.current.playMode === "sequential") {
         const srtData = srtDataRef.current;
@@ -237,22 +238,14 @@ const Player = ({ session, onReset }) => {
           (s) => currentTime >= parseTime(s.startTime) && currentTime <= parseTime(s.endTime)
         );
         
-        // 当进入新句子时，更新字幕和高亮区间
-        if (newIdx !== -1 && newIdx !== currentIdx) {
-          setState((p) => ({ ...p, currentIdx: newIdx }));
-          const sub = srtData[newIdx];
-          const start = Math.max(0, parseTime(sub.startTime) - CONFIG.PADDING_SEC);
-          const end = Math.min(ws.getDuration(), parseTime(sub.endTime) + CONFIG.PADDING_SEC);
-
-          wsRegionsInstance.clearRegions();
-          wsRegionsInstance.addRegion({
-            start, end, color: "rgba(16, 185, 129, 0.15)", drag: false, resize: false
-          });
+        const regions = wsRegionsInstance.getRegions();
+        // 当进入新句子，或者当前页面居然没有高亮区域时（兜底），触发更新
+        if (newIdx !== -1 && (newIdx !== currentIdx || regions.length === 0)) {
+          playSegment(newIdx, false);
         }
       }
     });
 
-    // Interaction logic
     ws.on("interaction", (newTime) => {
       reachedEndRef.current = false;
       const srtData = srtDataRef.current;
@@ -305,7 +298,6 @@ const Player = ({ session, onReset }) => {
             playSegment(currentIdx + 1, true);
         },
         KeyR: () => {
-          // 👈 快捷键同步更新
           setState((p) => {
             const newMode = p.playMode === "sequential" ? "single" : "sequential";
             showToast(`Mode: ${newMode === "single" ? "Single Pause" : "Sequential"}`);
@@ -339,7 +331,7 @@ const Player = ({ session, onReset }) => {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [playSegment, togglePlayPause]); // 添加 togglePlayPause 作为依赖
+  }, [playSegment, togglePlayPause]);
 
   const currentSub =
     state.currentIdx !== -1 ? srtData[state.currentIdx] : null;
@@ -418,7 +410,6 @@ const Player = ({ session, onReset }) => {
           {/* Toolbar */}
           <div className="flex items-center justify-between bg-white/5 rounded-xl p-2 border border-white/5">
             <div className="flex gap-1">
-              {/* 👈 核心逻辑3：修改 IconButton 绑定和 UI 表现 */}
               <IconButton
                 icon={state.playMode === "single" ? Repeat1 : Repeat}
                 onClick={() => {
