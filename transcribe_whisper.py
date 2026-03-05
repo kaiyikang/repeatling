@@ -10,6 +10,8 @@
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import urlretrieve
 from dataclasses import dataclass
 
 import questionary
@@ -114,9 +116,16 @@ def select(prompt: str, options: list[tuple], default: str, label_fn=None) -> st
 def parse_audio_file() -> str:
     if len(sys.argv) < 2:
         print("❌ 错误：未指定音频文件。")
-        print(f"用法: uv run {os.path.basename(__file__)} <音频文件路径>")
+        print(f"用法: uv run {os.path.basename(__file__)} <音频文件路径 或 URL>")
         sys.exit(1)
-    return sys.argv[1]
+    src = sys.argv[1]
+    if src.startswith(("http://", "https://")):
+        dest = Path("downloads") / Path(urlparse(src).path).name
+        dest.parent.mkdir(exist_ok=True)
+        print(f"⬇️  正在下载: {src}")
+        urlretrieve(src, dest)
+        return str(dest)
+    return src
 
 def prompt_config(audio_file: str) -> TranscribeConfig:
     print("\n  🎙  \033[1mWhisper 字幕生成器\033[0m\n")

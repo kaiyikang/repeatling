@@ -12,21 +12,27 @@ NC='\033[0m' # 恢复默认颜色
 echo -e "${BLUE}=== 开始配置音频处理环境 ===${NC}\n"
 
 # ---------------------------------------------------------
-# 1. 创建并进入文件夹
+# 1. 确认安装目录
 # ---------------------------------------------------------
-FOLDER_NAME="AudioProject"
-echo -e "${YELLOW}步骤 1: 准备工作目录...${NC}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+echo -e "${YELLOW}步骤 1: 确认安装目录...${NC}"
+echo -e "脚本所在目录: ${BLUE}${SCRIPT_DIR}${NC}"
 
-if [ ! -d "$FOLDER_NAME" ]; then
-    mkdir "$FOLDER_NAME"
-    echo -e "${GREEN}✅ 已创建文件夹: $FOLDER_NAME${NC}"
-else
-    echo -e "${GREEN}✅ 文件夹 $FOLDER_NAME 已存在，直接使用。${NC}"
+# 检查目录内是否有除本脚本之外的其他文件
+OTHER_FILES=$(find "$SCRIPT_DIR" -maxdepth 1 -not -name "$(basename "$0")" -not -path "$SCRIPT_DIR" | sort)
+if [ -n "$OTHER_FILES" ]; then
+    echo -e "\n⚠️  ${YELLOW}注意：该目录非空，安装将在此处继续。${NC}\n"
 fi
 
-# 进入文件夹
-cd "$FOLDER_NAME"
-echo -e "当前路径: $(pwd)\n"
+# 询问用户确认
+read -r -p "是否在此目录安装？[y/N] " CONFIRM
+if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+    echo -e "${YELLOW}已取消安装。请将脚本移至目标目录后重新运行。${NC}"
+    exit 0
+fi
+
+cd "$SCRIPT_DIR"
+echo -e "${GREEN}✅ 将在 $(pwd) 中进行安装。${NC}\n"
 
 # ---------------------------------------------------------
 # 2. 安装 Python 包管理工具 uv
@@ -82,4 +88,4 @@ fi
 # ---------------------------------------------------------
 echo -e "${BLUE}=======================================${NC}"
 echo -e "${GREEN}🎉 恭喜！所有基础工具已准备完毕！${NC}"
-echo -e "你可以输入 ${YELLOW}cd $FOLDER_NAME${NC} 来确保你在工作目录中，然后开始编写代码吧！"
+echo -e "工作目录: ${YELLOW}${SCRIPT_DIR}${NC}，可以开始编写代码了！"
