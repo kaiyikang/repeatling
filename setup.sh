@@ -39,6 +39,8 @@ if command -v uv &> /dev/null; then
 else
     echo -e "正在安装 uv..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
+    # 立即将 uv 加入当前 shell 的 PATH，无需重新开终端
+    export PATH="$HOME/.local/bin:$PATH"
     echo -e "${GREEN}✅ uv 安装完成！${NC}\n"
 fi
 

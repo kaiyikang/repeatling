@@ -20,7 +20,7 @@ from faster_whisper import WhisperModel
 #  Constants
 # ─────────────────────────────────────────────
 
-HF_CACHE = Path.home() / ".cache" / "huggingface" / "hub"
+MODEL_DIR = Path(__file__).resolve().parent / "models"
 
 SENTENCE_END_CHARS = {'.', '?', '!', '。', '？', '！', '…'}
 
@@ -78,7 +78,7 @@ class TranscribeConfig:
 # ─────────────────────────────────────────────
 
 def is_model_cached(name: str) -> bool:
-    return (HF_CACHE / f"models--Systran--faster-whisper-{name}").exists()
+    return (MODEL_DIR / f"models--Systran--faster-whisper-{name}").exists()
 
 def model_label(name: str, desc: str) -> str:
     badge = "✓ 已下载" if is_model_cached(name) else "↓ 需下载"
@@ -152,7 +152,9 @@ def confirm_config(cfg: TranscribeConfig) -> None:
 
 def transcribe(cfg: TranscribeConfig) -> list[dict]:
     print(f"\n🚀 正在加载模型 {cfg.model_size} ({cfg.device} / {cfg.compute_type})…")
-    model = WhisperModel(cfg.model_size, device=cfg.device, compute_type=cfg.compute_type)
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    model = WhisperModel(cfg.model_size, device=cfg.device, compute_type=cfg.compute_type,
+                         download_root=str(MODEL_DIR))
 
     print("🎙️  正在转录，请稍候…\n")
     segments, info = model.transcribe(cfg.audio_file, beam_size=5, word_timestamps=True, vad_filter=True)
