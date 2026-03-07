@@ -17,7 +17,16 @@ import {
   Type,
   Command,
   RefreshCw,
+  Timer,
 } from "lucide-react";
+
+const formatElapsed = (secs) => {
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+};
 import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 
@@ -113,11 +122,16 @@ const Player = ({ session, onReset }) => {
   const wsRegions = useRef(null);
   const reachedEndRef = useRef(false);
 
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+
   const srtData = useState(() =>
     session.srtText ? new srtParser2().fromSrt(session.srtText) : [],
   )[0];
 
-  // 👈 核心修复 1：引入同步的 Ref 来追踪索引，防止 React setState 异步导致的错乱
   const syncIdxRef = useRef(srtData.length > 0 ? 0 : -1);
 
   const [state, setState] = useState({
@@ -372,6 +386,11 @@ const Player = ({ session, onReset }) => {
             <div className="flex items-center gap-1.5">
               <Type size={12} />
               <span>{srtData.length} lines</span>
+            </div>
+            <div className="w-px h-3 bg-white/10" />
+            <div className="flex items-center gap-1.5 tabular-nums">
+              <Timer size={12} />
+              <span>{formatElapsed(elapsed)}</span>
             </div>
           </div>
           <button
