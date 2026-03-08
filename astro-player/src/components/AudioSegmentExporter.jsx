@@ -44,7 +44,7 @@ const toWavBlob = (buf) => {
  * @param {Object} srtEntry          - srtData[i]
  * @param {Object} [opts]
  */
-export const extractSegment = async (audioBuffer, baseFilename, srtEntry, { padding = 0.1, targetSampleRate = 22050 } = {}) => {
+export const extractSegment = async (audioBuffer, baseFilename, srtEntry, { padding = 0.1, targetSampleRate = 44100 } = {}) => {
   const start = Math.max(0, parseSrtTime(srtEntry.startTime) - padding);
   
   // 确保结束时间不超过音频总时长
@@ -54,7 +54,6 @@ export const extractSegment = async (audioBuffer, baseFilename, srtEntry, { padd
   if (duration <= 0) throw new Error("无效的裁切区间");
 
   // 核心魔法：使用 OfflineAudioContext 一次性完成【裁切】+【单声道混合】+【降采样】
-  // 参数: (声道数 1, 总采样数, 目标采样率 16000)
   const offlineCtx = new window.OfflineAudioContext(1, duration * targetSampleRate, targetSampleRate);
   
   const source = offlineCtx.createBufferSource();
