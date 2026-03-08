@@ -1,15 +1,9 @@
 /**
  * AudioSegmentExporter.jsx
- *
- * extractSegment(audioFile, srtEntry, options?)
- *   → Promise<{ blobUrl, blob, filename }>
- *
- * srtEntry shape (srt-parser-2):
- *   { id, startTime, endTime, text }
- *   e.g. startTime = "00:00:05,200"
  */
 
 const parseSrtTime = (t) => {
+  if (!t) return 0;
   const [h, m, s] = t.split(":");
   const [sec, ms] = s.split(",");
   return parseInt(h) * 3600 + parseInt(m) * 60 + parseInt(sec) + parseInt(ms) / 1000;
@@ -44,30 +38,38 @@ const toWavBlob = (buf) => {
 };
 
 /**
- * @param {File}   audioFile
- * @param {Object} srtEntry        - srtData[i]
+ * 提取并压缩片段
+ * @param {AudioBuffer} audioBuffer  - 从 WaveSurfer 获取的解码数据
+ * @param {string} baseFilename      - 原始文件名
+ * @param {Object} srtEntry          - srtData[i]
  * @param {Object} [opts]
- * @param {number} [opts.padding]  - extra seconds before/after (default 0.1)
- * @returns {Promise<{ blobUrl: string, blob: Blob, filename: string }>}
  */
-export const extractSegment = async (audioFile, srtEntry, { padding = 0.1 } = {}) => {
+export const extractSegment = async (audioBuffer, baseFilename, srtEntry, { padding = 0.1, targetSampleRate = 22050 } = {}) => {
   const start = Math.max(0, parseSrtTime(srtEntry.startTime) - padding);
-  const end   = parseSrtTime(srtEntry.endTime) + padding;
+  
+  // 确保结束时间不超过音频总时长
+  const end = Math.min(parseSrtTime(srtEntry.endTime) + padding, audioBuffer.duration);
+  const duration = end - start;
 
-  const ctx  = new (window.AudioContext || window.webkitAudioContext)();
-  const full = await ctx.decodeAudioData(await audioFile.arrayBuffer());
-  await ctx.close();
+  if (duration <= 0) throw new Error("无效的裁切区间");
 
-  const sr       = full.sampleRate;
-  const ch       = full.numberOfChannels;
-  const s0       = Math.floor(start * sr);
-  const len      = Math.floor(Math.min(end, full.duration) * sr) - s0;
+  // 核心魔法：使用 OfflineAudioContext 一次性完成【裁切】+【单声道混合】+【降采样】
+  // 参数: (声道数 1, 总采样数, 目标采样率 16000)
+  const offlineCtx = new window.OfflineAudioContext(1, duration * targetSampleRate, targetSampleRate);
+  
+  const source = offlineCtx.createBufferSource();
+  source.buffer = audioBuffer;
+  source.connect(offlineCtx.destination);
+  
+  // 从原音频的 start 秒开始播放，持续 duration 秒
+  source.start(0, start, duration);
 
-  const seg = new AudioBuffer({ numberOfChannels: ch, length: len, sampleRate: sr });
-  for (let c = 0; c < ch; c++)
-    seg.getChannelData(c).set(full.getChannelData(c).subarray(s0, s0 + len));
+  // 渲染出新的轻量级 AudioBuffer
+  const downsampledSeg = await offlineCtx.startRendering();
 
-  const blob = toWavBlob(seg);
-  const filename = `${audioFile.name.replace(/\.[^.]+$/, "")}_seg${srtEntry.id}.wav`;
+  // 转换为 WAV Blob
+  const blob = toWavBlob(downsampledSeg);
+  const filename = `${baseFilename.replace(/\.[^.]+$/, "")}_seg${srtEntry.id}.wav`;
+  
   return { blobUrl: URL.createObjectURL(blob), blob, filename };
 };

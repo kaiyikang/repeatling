@@ -346,16 +346,27 @@ const Player = ({ session, onReset }) => {
           }
         },
         KeyX: () => {
-          if (!session.audioFile || currentIdx === -1) return;
+          const audioBuffer = wavesurfer.current?.getDecodedData();
+          
+          if (!audioBuffer || !session.audioFile || currentIdx === -1) {
+             showToast("Audio not ready");
+             return;
+          }          
+          
           showToast("Exporting…");
-          extractSegment(session.audioFile, srtDataRef.current[currentIdx]).then(({ blobUrl, filename }) => {
-            const a = document.createElement("a");
-            a.href = blobUrl;
-            a.download = filename;
-            a.click();
-            setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
-            showToast(`${filename} downloaded!`);
-          }).catch(() => showToast("Export failed"));
+          extractSegment(audioBuffer, session.audioFile.name, srtDataRef.current[currentIdx])
+            .then(({ blobUrl, filename }) => {
+              const a = document.createElement("a");
+              a.href = blobUrl;
+              a.download = filename;
+              a.click();
+              setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+              showToast("Exported!");
+            })
+            .catch((err) => {
+              console.error("Export Error:", err); // 方便控制台排错
+              showToast("Export failed");
+            });
         },
       };
 
